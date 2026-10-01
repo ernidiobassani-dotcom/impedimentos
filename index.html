@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Impedimentos – escala da cirurgia HMAPA</title>
+<link rel="icon" href="data:,">
+<style>
+  :root { color-scheme: light; --tinta: #1d1d1f; --suave: #6b6b70; --linha: #d9d9de; --fundo: #ffffff; --fds: #f1f1f4;
+          --marca: #b3261e; --ok: #1b6e3a; --botao: #0b57d0; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--fundo); color: var(--tinta);
+         font: 16px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 480px; margin: 0 auto; padding: 16px 16px 40px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: var(--suave); margin: 0 0 20px; }
+  .sub b { color: var(--tinta); }
+  h2 { font-size: 16px; margin: 24px 0 6px; }
+  .ajuda { color: var(--suave); font-size: 14px; margin: 0 0 10px; }
+  select, input[type=text], textarea { width: 100%; font: inherit; padding: 10px; border: 1px solid var(--linha);
+         border-radius: 8px; background: #fff; color: var(--tinta); }
+  .cal { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
+  .cal.off { opacity: .35; pointer-events: none; }
+  .dow { text-align: center; font-size: 13px; color: var(--suave); padding: 4px 0; }
+  .dia { min-height: 46px; font: inherit; font-weight: 600; border: 1px solid var(--linha); border-radius: 8px;
+         background: #fff; color: var(--tinta); -webkit-tap-highlight-color: transparent; }
+  .dia.fds { background: var(--fds); }
+  .dia.on { background: var(--marca); border-color: var(--marca); color: #fff; }
+  .nada { display: flex; gap: 10px; align-items: center; margin-top: 14px; padding: 12px; border: 1px solid var(--linha);
+          border-radius: 8px; }
+  .nada input { width: 22px; height: 22px; }
+  .trecho { border: 1px solid var(--linha); border-radius: 8px; padding: 10px; margin-bottom: 8px; }
+  .faixa { font-weight: 600; margin-bottom: 6px; }
+  .faixa small { color: var(--suave); font-weight: 400; }
+  .trecho input { margin-top: 6px; }
+  .vazio { color: var(--suave); font-size: 14px; }
+  #enviar, #denovo { width: 100%; margin-top: 24px; padding: 14px; font: inherit; font-weight: 700; border: 0;
+         border-radius: 10px; background: var(--botao); color: #fff; }
+  #enviar:disabled { opacity: .5; }
+  .regra { color: var(--suave); font-size: 14px; margin-top: 10px; text-align: center; }
+  .erro { margin-top: 14px; padding: 12px; border-radius: 8px; background: #fde7e7; color: #8c1d18; font-weight: 600; }
+  .feito { margin-top: 8px; padding: 16px; border-radius: 10px; background: #e6f4ea; }
+  .feito h2 { margin: 0 0 8px; color: var(--ok); font-size: 20px; }
+  .feito p { margin: 6px 0; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Impedimentos – escala da cirurgia HMAPA</h1>
+  <p class="sub" id="sub" hidden>Escala de <b id="mesNome"></b> · prazo: <b id="prazo"></b></p>
+
+  <p id="carregando" class="ajuda">Carregando…</p>
+
+  <section id="form" hidden>
+    <h2>1. Seu nome</h2>
+    <select id="nome"><option value="">Escolha o seu nome…</option></select>
+
+    <h2>2. Toque nos dias em que você NÃO pode</h2>
+    <p class="ajuda">Toque de novo para desmarcar.</p>
+    <div class="cal" id="cal"></div>
+    <label class="nada"><input type="checkbox" id="nada"> Não tenho impedimento neste mês</label>
+
+    <div id="blocoTrechos">
+      <h2>3. Tipo de cada trecho</h2>
+      <p class="ajuda">Pessoal: a escala não mostra o motivo. Oficial (férias, licença, curso…): escolha o motivo,
+        ele aparece na escala.</p>
+      <div id="trechos"><p class="vazio">Nenhum dia marcado.</p></div>
+    </div>
+
+    <h2>4. Observação <span class="ajuda">(opcional)</span></h2>
+    <textarea id="obs" rows="2" maxlength="500" placeholder="Ex.: período que continua no mês seguinte"></textarea>
+
+    <div id="erro" class="erro" hidden></div>
+    <button id="enviar" type="button">Enviar</button>
+    <p class="regra">Vale o último envio: para corrigir, marque tudo de novo e envie.</p>
+  </section>
+
+  <section id="ok" hidden>
+    <div class="feito">
+      <h2>Enviado ✓</h2>
+      <p>Como <b id="okNome"></b>, escala de <b id="okMes"></b>.</p>
+      <div id="okResumo"></div>
+    </div>
+    <p class="regra">Para corrigir: toque abaixo, marque tudo de novo e envie. Vale o último envio.</p>
+    <button id="denovo" type="button">Enviar de novo</button>
+  </section>
+</main>
+
+<script>
+// O Apps Script só entrega a lista (GET) e grava (POST); a página fica aqui para não quebrar em
+// celular com duas contas Google. Fonte do script: ~/cerebro/MILITAR/Escalas/Plantao/app-impedimentos/.
+const EXEC = 'https://script.google.com/macros/s/AKfycbw6FNrtE76cr6qzxics0hBTbg6nVLZwZJiMym87VSBRxz5G9Uz2PZD63Xz2BndRLx8U/exec';
+const MESES = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho', 'julho', 'agosto', 'setembro',
+  'outubro', 'novembro', 'dezembro'];
+const DOW = ['dom', 'seg', 'ter', 'qua', 'qui', 'sex', 'sáb'];
+let DADOS, ANO, MES, N_DIAS;
+
+// Sem cookies: com eles, o Google tenta usar a conta logada no celular e a resposta não vem.
+function chamar(opcoes) {
+  const ctl = new AbortController();
+  setTimeout(() => ctl.abort(), 30000);
+  return fetch(EXEC, Object.assign({ credentials: 'omit', signal: ctl.signal }, opcoes)).then(r => r.json());
+}
+const $ = id => document.getElementById(id);
+
+const marcados = new Set();
+let trechos = [];  // [{ini, fim, motivo, outro}]
+
+function diaSemana(d) { return DOW[new Date(ANO, MES - 1, d).getDay()]; }
+function faixaTexto(ini, fim) { return ini === fim ? String(ini) : ini + ' a ' + fim; }
+
+function montar() {
+  $('mesNome').textContent = MESES[MES - 1].toUpperCase() + ' ' + ANO;
+  const anterior = MES === 1 ? 12 : MES - 1;
+  $('prazo').textContent = 'dia 10/' + String(anterior).padStart(2, '0');
+  DADOS.roster.forEach(([id, nome]) => $('nome').add(new Option(nome, id)));
+
+  const cal = $('cal');
+  DOW.forEach(n => { const c = document.createElement('div'); c.className = 'dow'; c.textContent = n; cal.appendChild(c); });
+  for (let i = 0; i < new Date(ANO, MES - 1, 1).getDay(); i++) cal.appendChild(document.createElement('div'));
+  for (let d = 1; d <= N_DIAS; d++) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'dia';
+    const w = new Date(ANO, MES - 1, d).getDay();
+    if (w === 0 || w === 6) b.classList.add('fds');
+    b.textContent = d;
+    b.dataset.d = d;
+    b.addEventListener('click', () => {
+      marcados.has(d) ? marcados.delete(d) : marcados.add(d);
+      b.classList.toggle('on', marcados.has(d));
+      recalcular();
+    });
+    cal.appendChild(b);
+  }
+  $('nada').addEventListener('change', () => {
+    if ($('nada').checked) {
+      marcados.clear();
+      document.querySelectorAll('.dia.on').forEach(b => b.classList.remove('on'));
+      recalcular();
+    }
+    $('cal').classList.toggle('off', $('nada').checked);
+    $('blocoTrechos').hidden = $('nada').checked;
+  });
+  $('enviar').addEventListener('click', enviar);
+  $('denovo').addEventListener('click', () => { $('ok').hidden = true; $('form').hidden = false; window.scrollTo(0, 0); });
+}
+
+// Dias seguidos viram um trecho; cada trecho herda o motivo que já tinha (senão, Pessoal).
+function recalcular() {
+  const dias = [...marcados].sort((a, b) => a - b);
+  const novos = [];
+  dias.forEach(d => {
+    const ult = novos[novos.length - 1];
+    if (ult && d === ult.fim + 1) ult.fim = d; else novos.push({ ini: d, fim: d });
+  });
+  novos.forEach(n => {
+    const velho = trechos.find(t => t.ini <= n.fim && n.ini <= t.fim);
+    n.motivo = velho ? velho.motivo : 'Pessoal';
+    n.outro = velho ? velho.outro : '';
+  });
+  trechos = novos;
+  desenharTrechos();
+}
+
+function desenharTrechos() {
+  const box = $('trechos');
+  box.innerHTML = '';
+  if (!trechos.length) { box.innerHTML = '<p class="vazio">Nenhum dia marcado.</p>'; return; }
+  trechos.forEach(t => {
+    const div = document.createElement('div');
+    div.className = 'trecho';
+    const f = document.createElement('div');
+    f.className = 'faixa';
+    f.textContent = 'Dia ' + faixaTexto(t.ini, t.fim) + ' ';
+    const s = document.createElement('small');
+    s.textContent = t.ini === t.fim ? '(' + diaSemana(t.ini) + ')' : '(' + diaSemana(t.ini) + ' a ' + diaSemana(t.fim) + ')';
+    f.appendChild(s);
+    const sel = document.createElement('select');
+    sel.add(new Option('Pessoal', 'Pessoal'));
+    const og = document.createElement('optgroup');
+    og.label = 'Oficial (o motivo sai na escala)';
+    DADOS.motivos.filter(m => m !== 'Pessoal').forEach(m => og.appendChild(new Option(m === 'Outro' ? 'Outro (escrever)' : m, m)));
+    sel.appendChild(og);
+    sel.value = t.motivo;
+    const inp = document.createElement('input');
+    inp.type = 'text';
+    inp.maxLength = 60;
+    inp.placeholder = 'Qual o motivo oficial?';
+    inp.value = t.outro;
+    inp.hidden = t.motivo !== 'Outro';
+    sel.addEventListener('change', () => { t.motivo = sel.value; inp.hidden = t.motivo !== 'Outro'; });
+    inp.addEventListener('input', () => { t.outro = inp.value; });
+    div.append(f, sel, inp);
+    box.appendChild(div);
+  });
+}
+
+function mostrarErro(msg) {
+  $('erro').textContent = msg;
+  $('erro').hidden = false;
+}
+
+function enviar() {
+  $('erro').hidden = true;
+  const nada = $('nada').checked;
+  if (!$('nome').value) return mostrarErro('Escolha o seu nome (item 1).');
+  if (!nada && !trechos.length) return mostrarErro('Marque os dias ou "Não tenho impedimento neste mês".');
+  if (trechos.some(t => t.motivo === 'Outro' && !t.outro.trim())) return mostrarErro('Escreva o motivo do trecho marcado como "Outro".');
+  const btn = $('enviar');
+  btn.disabled = true;
+  btn.textContent = 'Enviando…';
+  const fim = () => { btn.disabled = false; btn.textContent = 'Enviar'; };
+  chamar({
+    method: 'POST',
+    body: JSON.stringify({
+      mes: DADOS.mes, id: $('nome').value, nenhum: nada, obs: $('obs').value,
+      trechos: nada ? [] : trechos.map(t => ({ ini: t.ini, fim: t.fim, motivo: t.motivo, outro: t.outro })),
+    }),
+  })
+    .then(r => r.ok ? mostrarOk(r) : mostrarErro('NÃO enviado: ' + r.erro + ' Tente de novo.'))
+    .catch(() => mostrarErro('NÃO enviado: sem conexão. Tente de novo.'))
+    .finally(fim);
+}
+
+function mostrarOk(r) {
+  $('okNome').textContent = r.nome;
+  const [a, m] = r.mes.split('-').map(Number);
+  $('okMes').textContent = MESES[m - 1] + '/' + a;
+  const box = $('okResumo');
+  box.innerHTML = '';
+  const linha = txt => { const p = document.createElement('p'); p.textContent = txt; box.appendChild(p); };
+  const legivel = s => s.replace(/(\d+)-(\d+)/g, '$1 a $2');
+  if (r.nenhum) linha('Sem impedimento.');
+  if (r.pessoal) linha('Pessoal: ' + legivel(r.pessoal.split(' ').join(', ')));
+  if (r.oficial) linha('Oficial: ' + legivel(r.oficial.replace(/:/g, ' ')));
+  $('form').hidden = true;
+  $('ok').hidden = false;
+  window.scrollTo(0, 0);
+}
+
+chamar()
+  .then(d => {
+    DADOS = d;
+    [ANO, MES] = d.mes.split('-').map(Number);
+    N_DIAS = new Date(ANO, MES, 0).getDate();
+    montar();
+    $('carregando').hidden = true;
+    $('sub').hidden = false;
+    $('form').hidden = false;
+  })
+  .catch(() => { $('carregando').textContent = 'Não carregou. Confira a internet e recarregue a página.'; });
+</script>
+</body>
+</html>
