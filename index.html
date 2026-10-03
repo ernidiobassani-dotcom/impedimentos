@@ -97,11 +97,15 @@ const MESES = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho', 'julh
 const DOW = ['dom', 'seg', 'ter', 'qua', 'qui', 'sex', 'sáb'];
 let DADOS, ANO, MES, N_DIAS;
 
+// A chave do grupo vem no link enviado no WhatsApp (?k=…); não fica neste código.
+const CHAVE = new URLSearchParams(location.search).get('k') || '';
+
 // Sem cookies: com eles, o Google tenta usar a conta logada no celular e a resposta não vem.
 function chamar(opcoes) {
   const ctl = new AbortController();
   setTimeout(() => ctl.abort(), 30000);
-  return fetch(EXEC, Object.assign({ credentials: 'omit', signal: ctl.signal }, opcoes)).then(r => r.json());
+  return fetch(EXEC + '?k=' + encodeURIComponent(CHAVE),
+    Object.assign({ credentials: 'omit', signal: ctl.signal }, opcoes)).then(r => r.json());
 }
 const $ = id => document.getElementById(id);
 
@@ -241,8 +245,11 @@ function mostrarOk(r) {
   window.scrollTo(0, 0);
 }
 
-chamar()
+if (!CHAVE) {
+  $('carregando').textContent = 'Use o link enviado no grupo da cirurgia.';
+} else chamar()
   .then(d => {
+    if (!d.ok) { $('carregando').textContent = d.erro; return; }
     DADOS = d;
     [ANO, MES] = d.mes.split('-').map(Number);
     N_DIAS = new Date(ANO, MES, 0).getDate();
