@@ -60,12 +60,13 @@
     <h2>2. Toque nos dias em que você NÃO pode</h2>
     <p class="ajuda">Toque de novo para desmarcar.</p>
     <div class="cal" id="cal"></div>
-    <label class="nada"><input type="checkbox" id="nada"> Não tenho impedimento neste mês</label>
+    <label class="nada"><input type="checkbox" id="nada"> <span id="nadaTxt">Não tenho impedimento</span></label>
 
     <div id="blocoTrechos">
       <h2>3. Tipo de cada trecho</h2>
       <p class="ajuda">Pessoal: a escala não mostra o motivo. Oficial (férias, licença, curso…): escolha o motivo,
-        ele aparece na escala.</p>
+        ele aparece na escala. Cada dia novo entra como Pessoal; dias seguidos com tipos diferentes ficam em
+        trechos separados.</p>
       <div id="trechos"><p class="vazio">Nenhum dia marcado.</p></div>
     </div>
 
@@ -101,16 +102,19 @@ let DADOS, ANO, MES, N_DIAS;
 const CHAVE = new URLSearchParams(location.search).get('k') || '';
 
 // Sem cookies: com eles, o Google tenta usar a conta logada no celular e a resposta não vem.
-function chamar(opcoes) {
+// O limite de tempo fica bem acima do pior caso do Google (partida a frio + planilha).
+function chamar(opcoes, limiteMs) {
   const ctl = new AbortController();
-  setTimeout(() => ctl.abort(), 30000);
+  const timer = setTimeout(() => ctl.abort(), limiteMs);
   return fetch(EXEC + '?k=' + encodeURIComponent(CHAVE),
-    Object.assign({ credentials: 'omit', signal: ctl.signal }, opcoes)).then(r => r.json());
+    Object.assign({ credentials: 'omit', signal: ctl.signal }, opcoes))
+    .then(r => r.json())
+    .finally(() => clearTimeout(timer));
 }
 const $ = id => document.getElementById(id);
 
-const marcados = new Set();
-let trechos = [];  // [{ini, fim, motivo, outro}]
+const marcados = new Map();  // dia → {motivo, outro}: o tipo é do dia, não do trecho
+let trechos = [];  // [{ini, fim, motivo, outro}], dias seguidos com o mesmo tipo
 
 function diaSemana(d) { return DOW[new Date(ANO, MES - 1, d).getDay()]; }
 function faixaTexto(ini, fim) { return ini === fim ? String(ini) : ini + ' a ' + fim; }
@@ -119,6 +123,7 @@ function montar() {
   $('mesNome').textContent = MESES[MES - 1].toUpperCase() + ' ' + ANO;
   const anterior = MES === 1 ? 12 : MES - 1;
   $('prazo').textContent = 'dia 10/' + String(anterior).padStart(2, '0');
+  $('nadaTxt').textContent = 'Não tenho impedimento em ' + MESES[MES - 1];
   DADOS.roster.forEach(([id, nome]) => $('nome').add(new Option(nome, id)));
 
   const cal = $('cal');
@@ -133,7 +138,7 @@ function montar() {
     b.textContent = d;
     b.dataset.d = d;
     b.addEventListener('click', () => {
-      marcados.has(d) ? marcados.delete(d) : marcados.add(d);
+      marcados.has(d) ? marcados.delete(d) : marcados.set(d, { motivo: 'Pessoal', outro: '' });
       b.classList.toggle('on', marcados.has(d));
       recalcular();
     });
@@ -152,21 +157,23 @@ function montar() {
   $('denovo').addEventListener('click', () => { $('ok').hidden = true; $('form').hidden = false; window.scrollTo(0, 0); });
 }
 
-// Dias seguidos viram um trecho; cada trecho herda o motivo que já tinha (senão, Pessoal).
+// Dias seguidos com o mesmo tipo viram um trecho. Juntar ou separar dias nunca troca o tipo
+// de um dia já classificado (antes, ao unir dois trechos, o motivo do segundo se perdia).
 function recalcular() {
-  const dias = [...marcados].sort((a, b) => a - b);
   const novos = [];
-  dias.forEach(d => {
+  [...marcados.keys()].sort((a, b) => a - b).forEach(d => {
+    const { motivo, outro } = marcados.get(d);
     const ult = novos[novos.length - 1];
-    if (ult && d === ult.fim + 1) ult.fim = d; else novos.push({ ini: d, fim: d });
-  });
-  novos.forEach(n => {
-    const velho = trechos.find(t => t.ini <= n.fim && n.ini <= t.fim);
-    n.motivo = velho ? velho.motivo : 'Pessoal';
-    n.outro = velho ? velho.outro : '';
+    if (ult && d === ult.fim + 1 && ult.motivo === motivo && ult.outro === outro) ult.fim = d;
+    else novos.push({ ini: d, fim: d, motivo: motivo, outro: outro });
   });
   trechos = novos;
   desenharTrechos();
+}
+
+function aplicarAoTrecho(t, campos) {
+  Object.assign(t, campos);
+  for (let d = t.ini; d <= t.fim; d++) Object.assign(marcados.get(d), campos);
 }
 
 function desenharTrechos() {
@@ -195,8 +202,11 @@ function desenharTrechos() {
     inp.placeholder = 'Qual o motivo oficial?';
     inp.value = t.outro;
     inp.hidden = t.motivo !== 'Outro';
-    sel.addEventListener('change', () => { t.motivo = sel.value; inp.hidden = t.motivo !== 'Outro'; });
-    inp.addEventListener('input', () => { t.outro = inp.value; });
+    sel.addEventListener('change', () => {
+      aplicarAoTrecho(t, { motivo: sel.value, outro: sel.value === 'Outro' ? t.outro : '' });
+      recalcular();  // une com o trecho vizinho se ficou do mesmo tipo
+    });
+    inp.addEventListener('input', () => aplicarAoTrecho(t, { outro: inp.value }));
     div.append(f, sel, inp);
     box.appendChild(div);
   });
@@ -211,7 +221,7 @@ function enviar() {
   $('erro').hidden = true;
   const nada = $('nada').checked;
   if (!$('nome').value) return mostrarErro('Escolha o seu nome (item 1).');
-  if (!nada && !trechos.length) return mostrarErro('Marque os dias ou "Não tenho impedimento neste mês".');
+  if (!nada && !trechos.length) return mostrarErro('Marque os dias ou "' + $('nadaTxt').textContent + '".');
   if (trechos.some(t => t.motivo === 'Outro' && !t.outro.trim())) return mostrarErro('Escreva o motivo do trecho marcado como "Outro".');
   const btn = $('enviar');
   btn.disabled = true;
@@ -223,9 +233,11 @@ function enviar() {
       mes: DADOS.mes, id: $('nome').value, nenhum: nada, obs: $('obs').value,
       trechos: nada ? [] : trechos.map(t => ({ ini: t.ini, fim: t.fim, motivo: t.motivo, outro: t.outro })),
     }),
-  })
-    .then(r => r.ok ? mostrarOk(r) : mostrarErro('NÃO enviado: ' + r.erro + ' Tente de novo.'))
-    .catch(() => mostrarErro('NÃO enviado: sem conexão. Tente de novo.'))
+  }, 60000)
+    .then(r => r.ok ? mostrarOk(r) : mostrarErro('NÃO enviado: ' + r.erro))
+    // Sem resposta não dá para saber se gravou; reenviar é seguro porque vale o último envio.
+    .catch(() => mostrarErro('Não deu para confirmar o envio (a conexão caiu ou demorou). Toque em Enviar de novo: '
+      + 'se o primeiro chegou, vale o último e nada se duplica.'))
     .finally(fim);
 }
 
@@ -247,7 +259,7 @@ function mostrarOk(r) {
 
 if (!CHAVE) {
   $('carregando').textContent = 'Use o link enviado no grupo da cirurgia.';
-} else chamar()
+} else chamar({}, 30000)
   .then(d => {
     if (!d.ok) { $('carregando').textContent = d.erro; return; }
     DADOS = d;
