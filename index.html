@@ -35,6 +35,13 @@
   .faixa small { color: var(--suave); font-weight: 400; }
   .trecho input { margin-top: 6px; }
   .vazio { color: var(--suave); font-size: 14px; }
+  .regras { font-size: 14px; border-left: 4px solid var(--marca); background: #fbf4f3; padding: 8px 12px;
+            border-radius: 0 8px 8px 0; margin-bottom: 10px; }
+  .regras p { margin: 4px 0; }
+  .alerta { margin-top: 8px; padding: 12px; border-radius: 8px; background: #fff4d6; color: #6b4b00;
+            font-size: 14px; font-weight: 600; }
+  .trecho select + input { margin-top: 6px; }
+  .feito .pend { color: var(--suave); font-size: 14px; }
   #enviar, #denovo { width: 100%; margin-top: 24px; padding: 14px; font: inherit; font-weight: 700; border: 0;
          border-radius: 10px; background: var(--botao); color: #fff; }
   #enviar:disabled { opacity: .5; }
@@ -63,11 +70,20 @@
     <label class="nada"><input type="checkbox" id="nada"> <span id="nadaTxt">Não tenho impedimento</span></label>
 
     <div id="blocoTrechos">
-      <h2>3. Tipo de cada trecho</h2>
-      <p class="ajuda">Pessoal: a escala não mostra o motivo. Oficial (férias, licença, curso…): escolha o motivo,
-        ele aparece na escala. Cada dia novo entra como Pessoal; dias seguidos com tipos diferentes ficam em
-        trechos separados.</p>
+      <h2>3. Motivo de cada trecho</h2>
+      <div class="regras">
+        <p><b>Todo dia marcado precisa de motivo e descrição.</b></p>
+        <p><b>Oficial</b> (férias, dispensa, curso…): é <b>impedimento</b> — vale direto e o motivo aparece na escala.</p>
+        <p><b>Pessoal</b> (plantão em outro serviço, viagem, saúde ou família): é <b>preferência, não impedimento</b>.
+          A chefia avalia o motivo e pode negar; sem justificativa válida, você será escalado.</p>
+        <p><b>Fim de semana pessoal: 1 por mês.</b> Mais que isso, só com plantão em outro serviço
+          (hospital e horário).</p>
+        <p>A escala é de conta acumulada: fim de semana não feito volta nos meses seguintes.</p>
+      </div>
+      <p class="ajuda">Dias seguidos com o mesmo motivo formam um trecho; para motivos diferentes, escolha
+        em cada dia.</p>
       <div id="trechos"><p class="vazio">Nenhum dia marcado.</p></div>
+      <div id="avisoFds" class="alerta" hidden></div>
     </div>
 
     <h2>4. Observação <span class="ajuda">(opcional)</span></h2>
@@ -113,8 +129,13 @@ function chamar(opcoes, limiteMs) {
 }
 const $ = id => document.getElementById(id);
 
-const marcados = new Map();  // dia → {motivo, outro}: o tipo é do dia, não do trecho
-let trechos = [];  // [{ini, fim, motivo, outro}], dias seguidos com o mesmo tipo
+// dia → {tipo, categoria, descricao}: o motivo é do dia, não do trecho. Dia novo entra sem motivo:
+// a pessoa escolhe (antes entrava como "Pessoal" e muitos enviavam sem pensar).
+const marcados = new Map();
+let trechos = [];  // [{ini, fim, tipo, categoria, descricao}], dias seguidos com o mesmo motivo
+const VAZIO = () => ({ tipo: '', categoria: '', descricao: '' });
+const mesmo = (a, b) => a.tipo === b.tipo && a.categoria === b.categoria && a.descricao === b.descricao;
+function categoria(tipo, valor) { return ((DADOS.categorias || {})[tipo] || []).find(c => c[0] === valor); }
 
 function diaSemana(d) { return DOW[new Date(ANO, MES - 1, d).getDay()]; }
 function faixaTexto(ini, fim) { return ini === fim ? String(ini) : ini + ' a ' + fim; }
@@ -122,7 +143,7 @@ function faixaTexto(ini, fim) { return ini === fim ? String(ini) : ini + ' a ' +
 function montar() {
   $('mesNome').textContent = MESES[MES - 1].toUpperCase() + ' ' + ANO;
   const anterior = MES === 1 ? 12 : MES - 1;
-  $('prazo').textContent = 'dia 10/' + String(anterior).padStart(2, '0');
+  $('prazo').textContent = DADOS.prazo || ('dia 10/' + String(anterior).padStart(2, '0'));
   $('nadaTxt').textContent = 'Não tenho impedimento em ' + MESES[MES - 1];
   DADOS.roster.forEach(([id, nome]) => $('nome').add(new Option(nome, id)));
 
@@ -138,7 +159,7 @@ function montar() {
     b.textContent = d;
     b.dataset.d = d;
     b.addEventListener('click', () => {
-      marcados.has(d) ? marcados.delete(d) : marcados.set(d, { motivo: 'Pessoal', outro: '' });
+      marcados.has(d) ? marcados.delete(d) : marcados.set(d, VAZIO());
       b.classList.toggle('on', marcados.has(d));
       recalcular();
     });
@@ -162,13 +183,30 @@ function montar() {
 function recalcular() {
   const novos = [];
   [...marcados.keys()].sort((a, b) => a - b).forEach(d => {
-    const { motivo, outro } = marcados.get(d);
+    const m = marcados.get(d);
     const ult = novos[novos.length - 1];
-    if (ult && d === ult.fim + 1 && ult.motivo === motivo && ult.outro === outro) ult.fim = d;
-    else novos.push({ ini: d, fim: d, motivo: motivo, outro: outro });
+    if (ult && d === ult.fim + 1 && mesmo(ult, m)) ult.fim = d;
+    else novos.push(Object.assign({ ini: d, fim: d }, m));
   });
   trechos = novos;
   desenharTrechos();
+  avisarFds();
+}
+
+// Fins de semana (sáb/dom da mesma semana) com dia PESSOAL que não é plantão em outro serviço.
+// Só avisa: quem decide é a chefia, na avaliação do dia 11.
+function avisarFds() {
+  const semanas = new Set();
+  marcados.forEach((m, d) => {
+    const w = new Date(ANO, MES - 1, d).getDay();
+    if ((w === 0 || w === 6) && m.tipo === 'Pessoal' && m.categoria !== 'Plantão externo') {
+      semanas.add(w === 0 ? d - 1 : d);  // domingo conta com o sábado anterior
+    }
+  });
+  const n = semanas.size;
+  $('avisoFds').hidden = n <= 1;
+  $('avisoFds').textContent = 'Você marcou ' + n + ' fins de semana como pessoal. Só 1 por mês é aceito sem '
+    + 'plantão em outro serviço; os demais são preferência e provavelmente serão negados.';
 }
 
 function aplicarAoTrecho(t, campos) {
@@ -190,23 +228,30 @@ function desenharTrechos() {
     s.textContent = t.ini === t.fim ? '(' + diaSemana(t.ini) + ')' : '(' + diaSemana(t.ini) + ' a ' + diaSemana(t.fim) + ')';
     f.appendChild(s);
     const sel = document.createElement('select');
-    sel.add(new Option('Pessoal', 'Pessoal'));
-    const og = document.createElement('optgroup');
-    og.label = 'Oficial (o motivo sai na escala)';
-    DADOS.motivos.filter(m => m !== 'Pessoal').forEach(m => og.appendChild(new Option(m === 'Outro' ? 'Outro (escrever)' : m, m)));
-    sel.appendChild(og);
-    sel.value = t.motivo;
+    sel.add(new Option('Escolha o motivo…', ''));
+    [['Oficial', 'Oficial (vale direto; o motivo sai na escala)'],
+     ['Pessoal', 'Pessoal (preferência; a chefia avalia e pode negar)']].forEach(([tipo, rotulo]) => {
+      const og = document.createElement('optgroup');
+      og.label = rotulo;
+      DADOS.categorias[tipo].forEach(([valor, nome]) => og.appendChild(new Option(nome, tipo + '|' + valor)));
+      sel.appendChild(og);
+    });
+    sel.value = t.tipo ? t.tipo + '|' + t.categoria : '';
+    const cat = categoria(t.tipo, t.categoria);
     const inp = document.createElement('input');
     inp.type = 'text';
-    inp.maxLength = 60;
-    inp.placeholder = 'Qual o motivo oficial?';
-    inp.value = t.outro;
-    inp.hidden = t.motivo !== 'Outro';
+    inp.maxLength = 80;
+    inp.placeholder = cat ? cat[2] : '';
+    inp.value = t.descricao;
+    inp.hidden = !cat;
     sel.addEventListener('change', () => {
-      aplicarAoTrecho(t, { motivo: sel.value, outro: sel.value === 'Outro' ? t.outro : '' });
-      recalcular();  // une com o trecho vizinho se ficou do mesmo tipo
+      const [tipo, valor] = sel.value ? sel.value.split('|') : ['', ''];
+      aplicarAoTrecho(t, { tipo: tipo, categoria: valor });
+      recalcular();  // une com o trecho vizinho se ficou com o mesmo motivo
     });
-    inp.addEventListener('input', () => aplicarAoTrecho(t, { outro: inp.value }));
+    inp.addEventListener('input', () => aplicarAoTrecho(t, { descricao: inp.value }));
+    // Ao sair do campo, une com o vizinho que ficou com a mesma descrição.
+    inp.addEventListener('change', recalcular);
     div.append(f, sel, inp);
     box.appendChild(div);
   });
@@ -222,7 +267,11 @@ function enviar() {
   const nada = $('nada').checked;
   if (!$('nome').value) return mostrarErro('Escolha o seu nome (item 1).');
   if (!nada && !trechos.length) return mostrarErro('Marque os dias ou "' + $('nadaTxt').textContent + '".');
-  if (trechos.some(t => t.motivo === 'Outro' && !t.outro.trim())) return mostrarErro('Escreva o motivo do trecho marcado como "Outro".');
+  const semMotivo = trechos.find(t => !t.categoria);
+  if (!nada && semMotivo) return mostrarErro('Escolha o motivo do dia ' + faixaTexto(semMotivo.ini, semMotivo.fim) + '.');
+  const semDesc = trechos.find(t => t.descricao.trim().length < 3);
+  if (!nada && semDesc) return mostrarErro('Descreva o motivo do dia ' + faixaTexto(semDesc.ini, semDesc.fim)
+    + ' (' + categoria(semDesc.tipo, semDesc.categoria)[1] + ').');
   const btn = $('enviar');
   btn.disabled = true;
   btn.textContent = 'Enviando…';
@@ -231,7 +280,8 @@ function enviar() {
     method: 'POST',
     body: JSON.stringify({
       mes: DADOS.mes, id: $('nome').value, nenhum: nada, obs: $('obs').value,
-      trechos: nada ? [] : trechos.map(t => ({ ini: t.ini, fim: t.fim, motivo: t.motivo, outro: t.outro })),
+      trechos: nada ? [] : trechos.map(t => ({ ini: t.ini, fim: t.fim, tipo: t.tipo, categoria: t.categoria,
+        descricao: t.descricao })),
     }),
   }, 60000)
     .then(r => r.ok ? mostrarOk(r) : mostrarErro('NÃO enviado: ' + r.erro))
@@ -248,10 +298,20 @@ function mostrarOk(r) {
   const box = $('okResumo');
   box.innerHTML = '';
   const linha = txt => { const p = document.createElement('p'); p.textContent = txt; box.appendChild(p); };
-  const legivel = s => s.replace(/(\d+)-(\d+)/g, '$1 a $2');
+  // Célula: "Categoria [descrição]:3-4; …" → "Dia 3 a 4 — Categoria (descrição)".
+  const itens = s => s.split('; ').filter(Boolean).map(x => {
+    const m = x.match(/^(.*) \[(.*)\]:(\d+)(?:-(\d+))?$/);
+    return m ? 'Dia ' + (m[4] ? m[3] + ' a ' + m[4] : m[3]) + ' — ' + m[1] + ' (' + m[2] + ')' : x;
+  });
   if (r.nenhum) linha('Sem impedimento.');
-  if (r.pessoal) linha('Pessoal: ' + legivel(r.pessoal.split(' ').join(', ')));
-  if (r.oficial) linha('Oficial: ' + legivel(r.oficial.replace(/:/g, ' ')));
+  if (r.oficial) { linha('Oficial:'); itens(r.oficial).forEach(linha); }
+  if (r.pessoal) {
+    linha('Pessoal (preferência):'); itens(r.pessoal).forEach(linha);
+    const p = document.createElement('p');
+    p.className = 'pend';
+    p.textContent = 'Pessoal é preferência, não impedimento: a chefia avalia antes da escala e pode negar.';
+    box.appendChild(p);
+  }
   $('form').hidden = true;
   $('ok').hidden = false;
   window.scrollTo(0, 0);
